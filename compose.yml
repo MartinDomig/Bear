@@ -1,0 +1,19 @@
+services:
+  bear:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - UNAME=${USER}
+    image: bear
+    container_name: bear
+    hostname: bear
+    stdin_open: true
+    tty: true
+    working_dir: ${PWD}
+    volumes:
+      - type: bind
+        source: ${HOME}
+        target: ${HOME}
+    network_mode: host
+    restart: unless-stopped
