@@ -229,7 +229,7 @@ static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer
   g_autoptr(GBytes) data = g_bytes_new(buffer, bytes_available);
 
   if (bear_options_verbose(fuzzer->options)) {
-    g_autofree gchar *hex = bear_hexdump(data);
+    g_autofree gchar *hex = bear_tools_bytes_to_hex(data);
     g_debug("Received %zu bytes @%s\n%s", bytes_available, fuzzer->current_vector, hex);
   }
 
@@ -279,7 +279,7 @@ gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *bytes) {
   gsize bytes_written = 0;
 
   if (bear_options_verbose(fuzzer->options)) {
-    g_autofree gchar *hex = bear_hexdump(bytes);
+    g_autofree gchar *hex = bear_tools_bytes_to_hex(bytes);
     g_debug("Sending %zu bytes:\n%s", size, hex);
   }
 

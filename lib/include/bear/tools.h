@@ -4,6 +4,7 @@
 
 G_BEGIN_DECLS
 
-gchar *bear_hexdump(GBytes *data);
+gchar *bear_tools_bytes_to_hex(GBytes *bytes);
+GBytes *bear_tools_hex_to_bytes(const gchar *hex);
 
 G_END_DECLS

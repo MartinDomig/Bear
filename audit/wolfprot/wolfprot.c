@@ -13,7 +13,7 @@ gboolean on_disconnect(BearFuzzer *fuzzer) {
 }
 
 gboolean on_receive(BearFuzzer *fuzzer, GBytes *data) {
-  g_autofree gchar *hexdump = bear_hexdump(data);
+  g_autofree gchar *hexdump = bear_tools_bytes_to_hex(data);
   g_message("Received data @%s:\n%s", bear_fuzzer_get_current_vector(fuzzer), hexdump);
   // TODO process received data
   return TRUE;

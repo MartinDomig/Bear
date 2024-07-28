@@ -27,3 +27,10 @@ test('blocks',
         dependencies : test_deps,
         install : false)
 )
+
+test('tools',
+    executable('tools',
+        'test-tools.c',
+        dependencies : test_deps,
+        install : false)
+)
