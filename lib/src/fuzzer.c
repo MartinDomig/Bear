@@ -115,8 +115,22 @@ BearFuzzyValue *bear_fuzzer_static_string(BearFuzzer *fuzzer, const gchar *strin
   return bear_fuzzer_static(fuzzer, data);
 }
 
+BearFuzzyValue *bear_fuzzer_static_hex(BearFuzzer *fuzzer, const gchar *hex) {
+  g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), NULL);
+  g_autoptr(GBytes) data = bear_tools_hex_to_bytes(hex);
+  g_return_val_if_fail(data != NULL, NULL);
+  return bear_fuzzer_static(fuzzer, data);
+}
+
 BearFuzzyValue *bear_fuzzer_variable(BearFuzzer *fuzzer, GBytes *data) {
   g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), 0);
+  return bear_fuzzer_add_value(fuzzer, bear_fuzzy_value_new_variable(data));
+}
+
+BearFuzzyValue *bear_fuzzer_variable_hex(BearFuzzer *fuzzer, const gchar *hex) {
+  g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), NULL);
+  g_autoptr(GBytes) data = bear_tools_hex_to_bytes(hex);
+  g_return_val_if_fail(data != NULL, NULL);
   return bear_fuzzer_add_value(fuzzer, bear_fuzzy_value_new_variable(data));
 }
 

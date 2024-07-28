@@ -39,12 +39,23 @@ static void variable_string() {
   }
 }
 
+static void static_hex() {
+  g_autoptr(BearFuzzer) fuzzer = bear_fuzzer_new(NULL);
+  bear_fuzzer_static_hex(fuzzer, "0xC0FFEE B4BE");
+  g_autofree gchar *start_vector = bear_fuzzer_get_start_vector(fuzzer);
+  g_autoptr(GBytes) data = bear_fuzzer_get_data(fuzzer, start_vector);
+  g_assert_cmpuint(g_bytes_get_size(data), ==, 5);
+  guint8 expected[] = {0xC0, 0xFF, 0xEE, 0xB4, 0xBE};
+  g_assert_cmpmem(g_bytes_get_data(data, NULL), 5, expected, 5);
+}
+
 int main(int argc, char *argv[]) {
   g_test_init(&argc, &argv, NULL);
 
   g_test_add_func("/fuzzer/static", static_data);
   g_test_add_func("/fuzzer/string", static_string);
   g_test_add_func("/fuzzer/varstring", variable_string);
+  g_test_add_func("/fuzzer/static_hex", static_hex);
 
   return g_test_run();
 }
