@@ -147,3 +147,28 @@ GBytes *bear_tools_hex_to_bytes(const gchar *hex) {
     g_strfreev(lines);
     return g_byte_array_free_to_bytes(byte_array);
 }
+
+gchar *bear_tools_bytes_squash(const gchar *hex) {
+    g_autoptr(GBytes) bytes = bear_tools_hex_to_bytes(hex);
+    g_autofree gchar *normalized = bear_tools_bytes_to_hex(bytes);
+
+    GString *squashed = g_string_new("");
+
+    // split lines by '\n'
+    gchar **lines = g_strsplit(normalized, "\n", -1);
+    for (gchar **line = lines; *line; line++) {
+        // remove prefix and suffix
+        sanitize_line(*line);
+
+        // use everything that is not a blank
+        gchar *p = *line;
+        while (*p) {
+            if (*p != ' ')
+                g_string_append_c(squashed, *p);
+            p++;
+        }
+    }
+    g_strfreev(lines);
+
+    return g_string_free(squashed, FALSE);
+}

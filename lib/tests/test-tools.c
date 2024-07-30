@@ -156,6 +156,12 @@ static void coffeebabe() {
     g_assert_cmpmem(data, size, expected, sizeof(expected));
 }
 
+static void squash() {
+    const gchar *str = "0x00: 0xC0 FF EE 0xBABE [string]";
+    g_autofree gchar *squashed = bear_tools_bytes_squash(str);
+    g_assert_cmpstr(squashed, ==, "c0ffeebabe");
+}
+
 int main(int argc, char *argv[]) {
     g_test_init(&argc, &argv, NULL);
 
@@ -170,6 +176,7 @@ int main(int argc, char *argv[]) {
     g_test_add_func("/tools/hex_to_bytes/6", hex_to_bytes_weird_prefixes_and_suffixes);
     g_test_add_func("/tools/hex_to_bytes/7", incomplete_nibble);
     g_test_add_func("/tools/hex_to_bytes/8", coffeebabe);
+    g_test_add_func("/tools/hex_to_bytes/9", squash);
 
     return g_test_run();
 }
