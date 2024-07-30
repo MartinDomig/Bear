@@ -21,8 +21,9 @@ gboolean on_connect(BearFuzzer *fuzzer) {
 gboolean on_disconnect(BearFuzzer *fuzzer) {
     // We assume the remote side crashed if we get disconnected, so we log the offending payload to a file named after the
     // vector.
-    const gchar *vector = bear_fuzzer_get_current_vector(fuzzer);
-    g_autoptr(GBytes) bytes = bear_fuzzer_get_data(fuzzer, vector);
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+    const gchar *vector = bear_generator_get_current_vector(generator);
+    g_autoptr(GBytes) bytes = bear_generator_get_data(generator, vector);
     g_autofree gchar *hexdump = bear_tools_bytes_to_hex(bytes);
 
     g_autofree gchar *filename = g_strdup_printf("wp-disconnected-%s.txt", vector);
@@ -39,7 +40,9 @@ gboolean on_disconnect(BearFuzzer *fuzzer) {
 
 gboolean on_receive(BearFuzzer *fuzzer, GBytes *data) {
     g_autofree gchar *hexdump = bear_tools_bytes_to_hex(data);
-    g_message("Received data @%s:\n%s", bear_fuzzer_get_current_vector(fuzzer), hexdump);
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+    const gchar *vector = bear_generator_get_current_vector(generator);
+    g_message("Received data @%s:\n%s", vector, hexdump);
     // TODO process received data
     return TRUE;
 }
