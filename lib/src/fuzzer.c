@@ -411,7 +411,7 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
     g_return_if_fail(fuzzer->values != NULL);
 
     const gchar *given_start_vector = bear_options_get_start_vector(fuzzer->options);
-    if (!bear_generator_validate_vector(fuzzer->generator, given_start_vector)) {
+    if (given_start_vector && !bear_generator_validate_vector(fuzzer->generator, given_start_vector)) {
         g_warning("Invalid start vector \"%s\".", given_start_vector);
         return;
     }
