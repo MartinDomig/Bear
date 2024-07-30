@@ -27,6 +27,11 @@ gsize bear_fuzzy_value_get_max_string_length(BearFuzzyValue *value);
 gsize bear_fuzzy_value_size(BearFuzzyValue *value, GList *all_values, gsize variability);
 gsize bear_fuzzy_value_variability(BearFuzzyValue *value);
 void bear_fuzzy_value_set_block(BearFuzzyValue *value, const gchar *block_name);
-GBytes *bear_fuzzy_value_generate(BearFuzzyValue *value, GList *all_values, gsize variability);
+
+void bear_fuzzy_value_reset(BearFuzzyValue *value);
+void bear_fuzzy_value_compute_simple(BearFuzzyValue *value, gsize variability);
+void bear_fuzzy_value_compute_recursive(BearFuzzyValue *value, GList *values, gsize variability, GArray *all_variabilities);
+gboolean bear_fuzzy_value_is_computed(BearFuzzyValue *value);
+GBytes *bear_fuzzy_value_get_computed_data(BearFuzzyValue *value);
 
 G_END_DECLS

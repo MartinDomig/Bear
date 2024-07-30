@@ -1,4 +1,5 @@
 #include <bear/fuzzer.h>
+#include <bear/generator.h>
 #include <bear/options.h>
 #include <bear/tools.h>
 
@@ -23,9 +24,10 @@ struct _BearFuzzer {
     GInputStream *input_stream;
     GOutputStream *output_stream;
     GSource *source;
-    gchar *current_vector;
     gboolean connected;
     GList *block_stack;
+
+    BearGenerator *generator;
 };
 
 G_DEFINE_TYPE(BearFuzzer, bear_fuzzer, G_TYPE_OBJECT)
@@ -46,6 +48,7 @@ void bear_fuzzer_finalize(GObject *object) {
     g_clear_object(&fuzzer->connection);
     g_clear_object(&fuzzer->client);
     g_clear_object(&fuzzer->options);
+    g_clear_object(&fuzzer->generator);
     G_OBJECT_CLASS(bear_fuzzer_parent_class)->finalize(object);
 }
 
@@ -78,6 +81,8 @@ static gchar *bear_fuzzer_block_stack(BearFuzzer *fuzzer) {
 }
 
 static BearFuzzyValue *bear_fuzzer_add_value(BearFuzzer *fuzzer, BearFuzzyValue *value) {
+    g_return_val_if_fail(fuzzer->generator == NULL, NULL);
+
     g_autofree gchar *block = bear_fuzzer_block_stack(fuzzer);
     bear_fuzzy_value_set_block(value, block);
     bear_fuzzy_value_set_max_string_length(value, bear_options_max_string_length(fuzzer->options));
@@ -96,17 +101,20 @@ BearFuzzyValue *bear_fuzzer_static_uint8(BearFuzzer *fuzzer, guint8 value) {
 }
 
 BearFuzzyValue *bear_fuzzer_static_uint16(BearFuzzer *fuzzer, guint16 value) {
-    g_autoptr(GBytes) data = g_bytes_new(&value, sizeof(value));
+    guint16 network_value = GUINT16_TO_BE(value);
+    g_autoptr(GBytes) data = g_bytes_new(&network_value, sizeof(value));
     return bear_fuzzer_static(fuzzer, data);
 }
 
 BearFuzzyValue *bear_fuzzer_static_uint32(BearFuzzer *fuzzer, guint32 value) {
-    g_autoptr(GBytes) data = g_bytes_new(&value, sizeof(value));
+    guint32 network_value = GUINT32_TO_BE(value);
+    g_autoptr(GBytes) data = g_bytes_new(&network_value, sizeof(value));
     return bear_fuzzer_static(fuzzer, data);
 }
 
 BearFuzzyValue *bear_fuzzer_static_uint64(BearFuzzer *fuzzer, guint64 value) {
-    g_autoptr(GBytes) data = g_bytes_new(&value, sizeof(value));
+    guint64 network_value = GUINT64_TO_BE(value);
+    g_autoptr(GBytes) data = g_bytes_new(&network_value, sizeof(value));
     return bear_fuzzer_static(fuzzer, data);
 }
 
@@ -118,6 +126,8 @@ BearFuzzyValue *bear_fuzzer_static_string(BearFuzzer *fuzzer, const gchar *strin
 BearFuzzyValue *bear_fuzzer_static_hex(BearFuzzer *fuzzer, const gchar *hex) {
     g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), NULL);
     g_autoptr(GBytes) data = bear_tools_hex_to_bytes(hex);
+    g_autofree gchar *hex_str = bear_tools_bytes_to_hex(data);
+    g_print("Hex: %s\n", hex_str);
     g_return_val_if_fail(data != NULL, NULL);
     return bear_fuzzer_static(fuzzer, data);
 }
@@ -224,7 +234,7 @@ static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer
     gsize bytes_available =
         g_pollable_input_stream_read_nonblocking(G_POLLABLE_INPUT_STREAM(fuzzer->input_stream), buffer, sizeof(buffer), NULL, &error);
     if (error) {
-        g_message("Error reading from input stream @%s (%s)", fuzzer->current_vector, error->message);
+        g_message("Error reading from input stream @%s (%s)", bear_generator_get_current_vector(fuzzer->generator), error->message);
         fuzzer->connected = FALSE;
         if (fuzzer->on_disconnect)
             fuzzer->on_disconnect(fuzzer);
@@ -233,7 +243,7 @@ static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer
     // when the remote side closes the connection, we will get a read event
     // but no data will be available
     if (bytes_available == 0) {
-        g_message("Remote closed connection @%s", fuzzer->current_vector);
+        g_message("Remote closed connection @%s", bear_generator_get_current_vector(fuzzer->generator));
         fuzzer->connected = FALSE;
         if (fuzzer->on_disconnect)
             fuzzer->on_disconnect(fuzzer);
@@ -244,7 +254,7 @@ static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer
 
     if (bear_options_verbose(fuzzer->options)) {
         g_autofree gchar *hex = bear_tools_bytes_to_hex(data);
-        g_debug("Received %zu bytes @%s\n%s", bytes_available, fuzzer->current_vector, hex);
+        g_debug("Received %zu bytes @%s\n%s", bytes_available, bear_generator_get_current_vector(fuzzer->generator), hex);
     }
 
     if (fuzzer->on_receive) {
@@ -310,16 +320,6 @@ gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *bytes) {
     return bytes_written;
 }
 
-static gsize *bear_fuzzer_get_variabilities(BearFuzzer *fuzzer) {
-    gsize *variabilities = g_new0(gsize, g_list_length(fuzzer->values));
-    gsize i = 0;
-    for (GList *iterator = fuzzer->values; iterator; iterator = iterator->next) {
-        BearFuzzyValue *value = BEAR_FUZZY_VALUE(iterator->data);
-        variabilities[i++] = bear_fuzzy_value_variability(value);
-    }
-    return variabilities;
-}
-
 gsize *bear_fuzzer_get_vector_values(const gchar *vector, gsize *out_num_values) {
     gsize num_values = 0;
     for (gsize i = 0; vector[i]; i++) {
@@ -338,44 +338,26 @@ gsize *bear_fuzzer_get_vector_values(const gchar *vector, gsize *out_num_values)
     return values;
 }
 
-gboolean bear_validate_vector(BearFuzzer *fuzzer, const gchar *vector) {
-    g_autofree gsize *variabilities = bear_fuzzer_get_variabilities(fuzzer);
-    gsize num_values = 0;
-    g_autofree gsize *vector_values = bear_fuzzer_get_vector_values(vector, &num_values);
-    if (num_values != g_list_length(fuzzer->values))
-        return FALSE;
-    for (gsize i = 0; i < num_values; i++) {
-        if (vector_values[i] != 0 && vector_values[i] >= variabilities[i])
-            return FALSE;
-    }
-    return TRUE;
-}
-
-static gchar *get_effective_start_vector(BearFuzzer *fuzzer) {
-    gchar *vector = bear_fuzzer_get_start_vector(fuzzer);
-    const gchar *start_vector = bear_options_get_start_vector(fuzzer->options);
-    if (start_vector != NULL) {
-        g_free(vector);
-        vector = g_strdup(start_vector);
-    }
-    return vector;
+static const gchar *get_effective_start_vector(BearFuzzer *fuzzer) {
+    const gchar *vector = bear_options_get_start_vector(fuzzer->options);
+    if (vector != NULL && bear_generator_validate_vector(fuzzer->generator, vector))
+        return vector;
+    return bear_generator_get_start_vector(fuzzer->generator);
 }
 
 static gpointer bear_fuzzer_send_packets(gpointer user_data) {
     BearFuzzer *fuzzer = BEAR_FUZZER(user_data);
 
-    g_free(fuzzer->current_vector);
-    fuzzer->current_vector = get_effective_start_vector(fuzzer);
-    g_message("Start vector: %s", fuzzer->current_vector);
-
-    g_autofree gchar *last_vector = bear_fuzzer_get_last_vector(fuzzer);
-    g_message("Last vector: %s", last_vector);
+    bear_generator_set_vector(fuzzer->generator, get_effective_start_vector(fuzzer));
+    g_message("Start vector: %s", bear_generator_get_current_vector(fuzzer->generator));
+    g_message("Last vector: %s", bear_generator_get_last_vector(fuzzer->generator));
 
     gsize num_packets = bear_options_get_num_packets_to_send(fuzzer->options);
+    gsize total_variability = bear_generator_total_variability(fuzzer->generator);
     if (num_packets == 0)
-        num_packets = bear_fuzzer_total_variability(fuzzer);
+        num_packets = total_variability;
     else
-        num_packets = MIN(num_packets, bear_fuzzer_total_variability(fuzzer));
+        num_packets = MIN(num_packets, total_variability);
 
     int delay_ms = bear_options_get_send_delay_ms(fuzzer->options);
     if (delay_ms)
@@ -387,18 +369,19 @@ static gpointer bear_fuzzer_send_packets(gpointer user_data) {
               estimated_duration_seconds % 60);
 
     gsize i = 0;
-    while (fuzzer->current_vector && (num_packets == 0 || i < num_packets)) {
+    while (bear_generator_get_current_vector(fuzzer->generator) && (num_packets == 0 || i < num_packets)) {
         i++;
-        g_autoptr(GBytes) data = bear_fuzzer_get_data(fuzzer, fuzzer->current_vector);
+        const gchar *vector = bear_generator_get_current_vector(fuzzer->generator);
+        g_autoptr(GBytes) data = bear_generator_get_data(fuzzer->generator, vector);
         if (data) {
             gsize data_size = g_bytes_get_size(data);
 
             if (bear_options_verbose(fuzzer->options))
-                g_message("#%zu @%s size: %zu", i, fuzzer->current_vector, data_size);
+                g_message("#%zu @%s size: %zu", i, vector, data_size);
 
             gsize sent = bear_fuzzer_send(fuzzer, data);
             if (sent != data_size)
-                g_message("Send error @%s (sent %zu/%zu bytes)", fuzzer->current_vector, sent, data_size);
+                g_message("Send error @%s (sent %zu/%zu bytes)", vector, sent, data_size);
 
             if (delay_ms > 0)
                 g_usleep(delay_ms * 1000);
@@ -412,37 +395,24 @@ static gpointer bear_fuzzer_send_packets(gpointer user_data) {
         }
 
         if (!fuzzer->connected) {
-            g_message("Fuzzer is disconnected, stopping at vector %s", fuzzer->current_vector);
+            g_message("Fuzzer is disconnected, stopping at vector %s", vector);
             break;
         }
 
-        gchar *next_vector = bear_fuzzer_get_next_vector(fuzzer, fuzzer->current_vector);
-        g_free(fuzzer->current_vector);
-        fuzzer->current_vector = next_vector;
+        bear_generator_increment_vector(fuzzer->generator);
     }
-    g_free(fuzzer->current_vector);
 
     g_main_loop_quit(fuzzer->loop);
     return NULL;
 }
 
-gsize bear_fuzzer_total_variability(BearFuzzer *fuzzer) {
-    g_autofree gsize *variabilities = bear_fuzzer_get_variabilities(fuzzer);
-    gsize total_variability = 1;
-    for (gsize i = 0; i < g_list_length(fuzzer->values); i++) {
-        if (variabilities[i] > 0)
-            total_variability *= variabilities[i];
-    }
-    return total_variability;
-}
-
 void bear_fuzzer_run(BearFuzzer *fuzzer) {
     g_return_if_fail(BEAR_IS_FUZZER(fuzzer));
-    g_message("Total variability: %zu", bear_fuzzer_total_variability(fuzzer));
+    g_return_if_fail(fuzzer->values != NULL);
 
-    g_autofree gchar *vector = get_effective_start_vector(fuzzer);
-    if (!bear_validate_vector(fuzzer, vector)) {
-        g_warning("Invalid start vector \"%s\".", vector);
+    const gchar *given_start_vector = bear_options_get_start_vector(fuzzer->options);
+    if (!bear_generator_validate_vector(fuzzer->generator, given_start_vector)) {
+        g_warning("Invalid start vector \"%s\".", given_start_vector);
         return;
     }
 
@@ -466,85 +436,12 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
     g_thread_join(thread);
 }
 
-gchar *bear_fuzzer_get_start_vector(BearFuzzer *fuzzer) {
-    GString *vector = g_string_new("");
-    g_autofree gsize *variabilities = bear_fuzzer_get_variabilities(fuzzer);
-    for (gsize i = 0; i < g_list_length(fuzzer->values); i++) {
-        g_string_append(vector, ":");
-        if (variabilities[i] > 0)
-            g_string_append(vector, "0");
-    }
-    return g_string_free(vector, FALSE);
-}
-
-gchar *bear_fuzzer_get_last_vector(BearFuzzer *fuzzer) {
-    GString *vector = g_string_new("");
-    g_autofree gsize *variabilities = bear_fuzzer_get_variabilities(fuzzer);
-    for (gsize i = 0; i < g_list_length(fuzzer->values); i++) {
-        g_string_append(vector, ":");
-        if (variabilities[i] > 0)
-            g_string_append_printf(vector, "%zu", variabilities[i]);
-    }
-    return g_string_free(vector, FALSE);
-}
-
-gchar *bear_fuzzer_get_next_vector(BearFuzzer *fuzzer, const gchar *vector) {
+BearGenerator *bear_fuzzer_get_generator(BearFuzzer *fuzzer) {
     g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), NULL);
-    g_return_val_if_fail(vector != NULL && strlen(vector) > 0, NULL);
 
-    g_autofree gsize *variabilities = bear_fuzzer_get_variabilities(fuzzer);
-    gsize num_values = 0;
-    g_autofree gsize *vector_values = bear_fuzzer_get_vector_values(vector, &num_values);
-
-    if (num_values != g_list_length(fuzzer->values))
-        return NULL;
-
-    gboolean carry = TRUE;
-    for (int i = num_values - 1; i >= 0; i--) {
-        if (variabilities[i] > 0 && carry) {
-            vector_values[i]++;
-            carry = FALSE;
-            if (vector_values[i] < variabilities[i])
-                break;
-
-            carry = TRUE;
-            vector_values[i] = 0;
-        }
+    if (!fuzzer->generator) {
+        fuzzer->generator = bear_generator_new(fuzzer->values);
     }
 
-    if (carry)
-        return NULL;
-
-    GString *next_vector = g_string_new("");
-    for (gsize i = 0; i < num_values; i++) {
-        g_string_append(next_vector, ":");
-        if (variabilities[i] > 0)
-            g_string_append_printf(next_vector, "%zu", vector_values[i]);
-    }
-    return g_string_free(next_vector, FALSE);
-}
-
-const gchar *bear_fuzzer_get_current_vector(BearFuzzer *fuzzer) {
-    g_return_val_if_fail(BEAR_IS_FUZZER(fuzzer), NULL);
-    return fuzzer->current_vector;
-}
-
-GBytes *bear_fuzzer_get_data(BearFuzzer *fuzzer, const gchar *vector) {
-    gsize num_values = 0;
-    g_autofree gsize *vector_values = bear_fuzzer_get_vector_values(vector, &num_values);
-    if (num_values != g_list_length(fuzzer->values)) {
-        return NULL;
-    }
-
-    g_autoptr(GByteArray) data = g_byte_array_new();
-
-    for (gsize i = 0; i < num_values; i++) {
-        BearFuzzyValue *value = BEAR_FUZZY_VALUE(g_list_nth_data(fuzzer->values, i));
-        g_autoptr(GBytes) value_data = bear_fuzzy_value_generate(value, fuzzer->values, vector_values[i]);
-        gsize size = g_bytes_get_size(value_data);
-        const guint8 *bytes = g_bytes_get_data(value_data, NULL);
-        g_byte_array_append(data, bytes, size);
-    }
-
-    return g_bytes_new(data->data, data->len);
+    return fuzzer->generator;
 }

@@ -12,6 +12,9 @@ struct _BearFuzzyValue {
     GList *possible_values;
     gchar *my_block_name;
     gchar *referenced_block_name;
+
+    GBytes *computed_data;
+    gboolean computing;
 };
 
 G_DEFINE_TYPE(BearFuzzyValue, bear_fuzzy_value, G_TYPE_OBJECT)
@@ -28,6 +31,7 @@ static void bear_fuzzy_value_finalize(GObject *object) {
     g_free(value->my_block_name);
     g_free(value->referenced_block_name);
     g_bytes_unref(value->reference_value);
+    g_bytes_unref(value->computed_data);
 
     G_OBJECT_CLASS(bear_fuzzy_value_parent_class)->finalize(object);
 }
@@ -119,9 +123,7 @@ static void create_integers(BearFuzzyValue *value) {
 
 static void add_string(BearFuzzyValue *value, const gchar *new_value) {
     gsize s = MIN(strlen(new_value), value->max_string_length);
-    g_autofree gchar *buffer = g_new0(gchar, s + 1);
-    memcpy(buffer, new_value, s);
-    g_autoptr(GBytes) new_entry = g_bytes_new(buffer, s);
+    g_autoptr(GBytes) new_entry = g_bytes_new(new_value, s);
 
     for (GList *iter = value->possible_values; iter != NULL; iter = g_list_next(iter)) {
         GBytes *entry = iter->data;
@@ -385,6 +387,7 @@ static gboolean fuzzy_value_matches_block(BearFuzzyValue *value, const gchar *bl
 
 gsize bear_fuzzy_value_size(BearFuzzyValue *value, GList *all_values, gsize variability) {
     g_return_val_if_fail(BEAR_IS_FUZZY_VALUE(value), 0);
+    g_return_val_if_fail(value->computed_data != NULL, 0);
 
     if (value->value_type == BLOCK_SIZE)
         return g_bytes_get_size(value->reference_value);
@@ -409,38 +412,82 @@ gsize bear_fuzzy_value_variability(BearFuzzyValue *value) {
     return g_list_length(value->possible_values);
 }
 
-static GBytes *fuzzy_value_generate_block_size(BearFuzzyValue *value, GList *all_values, gsize variability) {
-    g_return_val_if_fail(value->value_type == BLOCK_SIZE, 0);
-    g_return_val_if_fail(value->referenced_block_name != NULL, 0);
+static void fuzzy_value_compute_block_size(BearFuzzyValue *value, GList *all_values, gsize variability, GArray *all_variabilities) {
+    g_return_if_fail(value->referenced_block_name != NULL);
+
+    if (value->computed_data != NULL)
+        return;
 
     gsize block_size = 0;
-    for (GList *iter = all_values; iter != NULL; iter = g_list_next(iter)) {
-        BearFuzzyValue *v = iter->data;
-        if (!fuzzy_value_matches_block(v, value->referenced_block_name))
+
+    for (gsize i = 0; i < g_list_length(all_values); i++) {
+        BearFuzzyValue *nth_value = BEAR_FUZZY_VALUE(g_list_nth_data(all_values, i));
+        if (!fuzzy_value_matches_block(nth_value, value->referenced_block_name))
             continue;
-        block_size += bear_fuzzy_value_size(v, all_values, variability);
+        gsize nth_variability = bear_fuzzy_value_variability(nth_value);
+
+        bear_fuzzy_value_compute_recursive(nth_value, all_values, nth_variability, all_variabilities);
+        g_autoptr(GBytes) nth_bytes = bear_fuzzy_value_get_computed_data(nth_value);
+
+        gsize nth_size = g_bytes_get_size(nth_bytes);
+        block_size += nth_size;
     }
 
-    guint32 mask = 0;
     gsize initial_size = g_bytes_get_size(value->reference_value);
-    for (gsize i = 0; i < initial_size; i++)
-        mask |= 0xFF << (i * 8);
+    if (initial_size == 2)
+        block_size = GUINT16_TO_BE(block_size);
+    else if (initial_size == 4)
+        block_size = GUINT32_TO_BE(block_size);
 
-    guint32 i = block_size & mask;
-    return g_bytes_new(&i, initial_size);
+    value->computed_data = g_bytes_new(&block_size, initial_size);
 }
 
-GBytes *bear_fuzzy_value_generate(BearFuzzyValue *value, GList *all_values, gsize variability) {
-    g_return_val_if_fail(BEAR_IS_FUZZY_VALUE(value), 0);
+void bear_fuzzy_value_reset(BearFuzzyValue *value) {
+    g_return_if_fail(BEAR_IS_FUZZY_VALUE(value));
 
+    g_bytes_unref(value->computed_data);
+    value->computed_data = NULL;
+    value->computing = FALSE;
+}
+
+GBytes *bear_fuzzy_value_get_computed_data(BearFuzzyValue *value) {
+    g_return_val_if_fail(BEAR_IS_FUZZY_VALUE(value), NULL);
+    return g_bytes_ref(value->computed_data);
+}
+
+void bear_fuzzy_value_compute_recursive(BearFuzzyValue *value, GList *values, gsize variability, GArray *all_variabilities) {
+    g_return_if_fail(BEAR_IS_FUZZY_VALUE(value));
+
+    if (value->computed_data != NULL)
+        return;
+
+    if (value->computing) {
+        g_warning("Circular dependency detected in fuzzy value (block: %s)", value->my_block_name);
+        return;
+    }
+
+    if (value->value_type == BLOCK_SIZE) {
+        value->computing = TRUE;
+        fuzzy_value_compute_block_size(value, values, variability, all_variabilities);
+        value->computing = FALSE;
+    }
+}
+
+void bear_fuzzy_value_compute_simple(BearFuzzyValue *value, gsize variability) {
     if (value->value_type == BLOCK_SIZE)
-        return fuzzy_value_generate_block_size(value, all_values, variability);
+        return;
 
-    if (value->value_type == STATIC)
-        return g_bytes_ref(value->reference_value);
-
+    if (value->value_type == STATIC) {
+        value->computed_data = g_bytes_ref(value->reference_value);
+        return;
+    }
     GBytes *entry = get_entry(value, variability);
-    return g_bytes_new(g_bytes_get_data(entry, NULL), g_bytes_get_size(entry));
+    value->computed_data = g_bytes_ref(entry);
+}
+
+gboolean bear_fuzzy_value_is_computed(BearFuzzyValue *value) {
+    g_return_val_if_fail(BEAR_IS_FUZZY_VALUE(value), FALSE);
+    return value->computed_data != NULL;
 }
 
 void bear_fuzzy_value_set_max_string_length(BearFuzzyValue *value, gsize max_length) {
@@ -457,6 +504,7 @@ gsize bear_fuzzy_value_get_max_string_length(BearFuzzyValue *value) {
 void bear_fuzzy_value_set_strings(BearFuzzyValue *value, ...) {
     g_return_if_fail(BEAR_IS_FUZZY_VALUE(value));
     g_return_if_fail(value->possible_values == NULL);
+    value->value_type = FUZZY_STRING;
 
     va_list args;
     va_start(args, value);

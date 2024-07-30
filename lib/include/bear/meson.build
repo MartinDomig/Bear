@@ -1,5 +1,6 @@
 libbear_sub_headers = files(
     'options.h',
+    'generator.h',
     'fuzzer.h',
     'fuzzy-value.h',
     'tools.h',

@@ -8,6 +8,7 @@
 #include <glib.h>
 
 #include <bear/fuzzy-value.h>
+#include <bear/generator.h>
 #include <bear/options.h>
 
 G_BEGIN_DECLS
@@ -50,14 +51,8 @@ void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb c
 
 gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *data);
 
-gsize bear_fuzzer_total_variability(BearFuzzer *fuzzer);
 void bear_fuzzer_run(BearFuzzer *fuzzer);
 
-gchar *bear_fuzzer_get_start_vector(BearFuzzer *fuzzer);
-gchar *bear_fuzzer_get_last_vector(BearFuzzer *fuzzer);
-gchar *bear_fuzzer_get_next_vector(BearFuzzer *fuzzer, const gchar *vector);
-const gchar *bear_fuzzer_get_current_vector(BearFuzzer *fuzzer);
-gsize *bear_fuzzer_get_vector_values(const gchar *vector, gsize *out_num_values);
-GBytes *bear_fuzzer_get_data(BearFuzzer *fuzzer, const gchar *vector);
+BearGenerator *bear_fuzzer_get_generator(BearFuzzer *fuzzer);
 
 G_END_DECLS
