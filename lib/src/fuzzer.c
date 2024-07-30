@@ -411,12 +411,6 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
     g_return_if_fail(BEAR_IS_FUZZER(fuzzer));
     g_return_if_fail(fuzzer->values != NULL);
 
-    const gchar *given_start_vector = bear_options_get_start_vector(fuzzer->options);
-    if (given_start_vector && !bear_generator_validate_vector(fuzzer->generator, given_start_vector)) {
-        g_warning("Invalid start vector \"%s\".", given_start_vector);
-        return;
-    }
-
     const gchar *target = bear_options_get_target(fuzzer->options);
     int port = bear_options_get_port(fuzzer->options);
     if (!target || port <= 0) {
@@ -427,6 +421,17 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
     g_message("Running fuzzer on target: %s:%i", target, port);
     if (!bear_fuzzer_connect(fuzzer))
         return;
+
+    if (bear_fuzzer_get_generator(fuzzer) == NULL) {
+        g_error("Failed to create generator");
+        return;
+    }
+
+    const gchar *given_start_vector = bear_options_get_start_vector(fuzzer->options);
+    if (given_start_vector && !bear_generator_validate_vector(fuzzer->generator, given_start_vector)) {
+        g_warning("Invalid start vector \"%s\".", given_start_vector);
+        return;
+    }
 
     GThread *thread = g_thread_new("fuzzer", (GThreadFunc)bear_fuzzer_send_packets, fuzzer);
 

@@ -112,6 +112,8 @@ GArray *bear_generator_get_vector_values(const gchar *vector) {
 }
 
 gboolean bear_generator_validate_vector(BearGenerator *generator, const gchar *vector) {
+    g_return_val_if_fail(BEAR_IS_GENERATOR(generator), FALSE);
+
     g_autoptr(GArray) vector_values = bear_generator_get_vector_values(vector);
     if (vector_values->len != g_list_length(generator->values))
         return FALSE;
