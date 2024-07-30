@@ -1,35 +1,35 @@
 test_deps = [ glib_dep, libbear_dep ]
 
 test('fuzzer-data',
-    executable('fuzzer-data',
+    executable('test-fuzzer-data',
         'test-fuzzer-data.c',
         dependencies : test_deps,
         install : false)
 )
 
-test('fuzzer-vectors',
-    executable('fuzzer-vectors',
-        'test-fuzzer-vectors.c',
+test('vectors',
+    executable('test-vectors',
+        'test-vectors.c',
         dependencies : test_deps,
         install : false)
 )
 
 test('fuzzy-value',
-    executable('fuzzy-value',
+    executable('test-fuzzy-value',
         'test-fuzzy-value.c',
         dependencies : test_deps,
         install : false)
 )
 
 test('blocks',
-    executable('blocks',
+    executable('test-blocks',
         'test-blocks.c',
         dependencies : test_deps,
         install : false)
 )
 
 test('tools',
-    executable('tools',
+    executable('test-tools',
         'test-tools.c',
         dependencies : test_deps,
         install : false)

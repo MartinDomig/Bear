@@ -15,6 +15,9 @@ static void validate_lines(const gchar *hexstr, const gchar *expected) {
         if (hexstr_lines[i] == NULL)
             g_assert_not_reached();
     }
+
+    g_strfreev(expected_lines);
+    g_strfreev(hexstr_lines);
 }
 
 static void bytes_to_hex1() {
@@ -33,7 +36,7 @@ static void bytes_to_hex2() {
     for (guint i = 0; i < sizeof(data); i++)
         data[i] = i;
 
-    GBytes *bytes2 = g_bytes_new(data, sizeof(data));
+    g_autoptr(GBytes) bytes2 = g_bytes_new(data, sizeof(data));
     g_autofree gchar *hexstr = bear_tools_bytes_to_hex(bytes2);
 
     const gchar *expected2 = "[00000000]  00 01 02 03 04 05 06 07   08 09 0a 0b 0c 0d 0e 0f   [................]\n"
@@ -61,7 +64,7 @@ static void bytes_to_hex3() {
     for (guint i = 0; i < sizeof(data3); i++)
         data3[i] = i;
 
-    GBytes *bytes3 = g_bytes_new(data3, sizeof(data3));
+    g_autoptr(GBytes) bytes3 = g_bytes_new(data3, sizeof(data3));
     g_autofree gchar *hexstr = bear_tools_bytes_to_hex(bytes3);
     const gchar *expected3 = "[00000000]  00 01 02 03 04 05 06 07   08 09 0a 0b 0c 0d 0e 0f   [................]\n"
                              "[00000010]  10 11 12 13                                         [....]\n";
