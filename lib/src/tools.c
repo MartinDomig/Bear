@@ -76,8 +76,8 @@ static void sanitize_line(gchar *line) {
     p = line;
     // if the line matches "^(0x|0X)?[0-9a-fA-F]{2,}: ", blank it out
     const char *regex = "^(0x|0X)?[0-9a-fA-F]{2,}: ";
-    GRegex *re = g_regex_new(regex, 0, 0, NULL);
-    GMatchInfo *match_info;
+    g_autoptr(GRegex) re = g_regex_new(regex, 0, 0, NULL);
+    g_autoptr(GMatchInfo) match_info;
     if (g_regex_match(re, p, 0, &match_info)) {
         gchar *match = g_match_info_fetch(match_info, 0);
         gsize len = g_utf8_strlen(match, -1);
