@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "by-gdb",
+      "request": "launch",
+      "name": "Attach to gdbserver",
+      "program": "build/lib/tests/${fileBasenameNoExtension}",
+      "cwd": "${workspaceRoot}",
+      "remote": {
+        "enabled": true,
+        "address": "localhost:4321",
+        "mode": "extended-remote",
+        "execfile": "build/lib/tests/${fileBasenameNoExtension}"
+      }
+    }
+  ]
+}
