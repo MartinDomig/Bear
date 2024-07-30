@@ -9,7 +9,8 @@ static void static_data() {
     bear_fuzzer_static_uint8(fuzzer, 0xDE);
     bear_fuzzer_static(fuzzer, data_bytes);
 
-    g_autoptr(GBytes) fuzzed_data = bear_fuzzer_get_data(fuzzer, "::");
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+    g_autoptr(GBytes) fuzzed_data = bear_generator_get_data(generator, "::");
     g_assert_nonnull(fuzzed_data);
 
     guint8 expected[] = {0xDE, 0x01, 0x02, 0x03, 0x04, 0x05};
@@ -19,8 +20,8 @@ static void static_data() {
 static void static_string() {
     g_autoptr(BearFuzzer) fuzzer = bear_fuzzer_new(NULL);
     bear_fuzzer_static_string(fuzzer, "asdf");
-    g_autofree gchar *start_vector = bear_fuzzer_get_start_vector(fuzzer);
-    g_autoptr(GBytes) data = bear_fuzzer_get_data(fuzzer, start_vector);
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+    g_autoptr(GBytes) data = bear_generator_get_data(generator, bear_generator_get_start_vector(generator));
     g_assert_cmpuint(g_bytes_get_size(data), ==, 4);
     g_assert_cmpmem(g_bytes_get_data(data, NULL), 4, "asdf", 4);
 }
@@ -28,22 +29,21 @@ static void static_string() {
 static void variable_string() {
     g_autoptr(BearFuzzer) fuzzer = bear_fuzzer_new(NULL);
     bear_fuzzer_variable_string(fuzzer, "");
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
 
-    gchar *vector = bear_fuzzer_get_start_vector(fuzzer);
-    while (vector) {
-        g_autoptr(GBytes) data = bear_fuzzer_get_data(fuzzer, vector);
+    while (bear_generator_get_current_vector(generator)) {
+        const gchar *vector = bear_generator_get_current_vector(generator);
+        g_autoptr(GBytes) data = bear_generator_get_data(generator, vector);
         g_debug("@%s data: %s", vector, (gchar *)g_bytes_get_data(data, NULL));
-        gchar *new_vector = bear_fuzzer_get_next_vector(fuzzer, vector);
-        g_free(vector);
-        vector = new_vector;
+        bear_generator_increment_vector(generator);
     }
 }
 
 static void static_hex() {
     g_autoptr(BearFuzzer) fuzzer = bear_fuzzer_new(NULL);
     bear_fuzzer_static_hex(fuzzer, "0xC0FFEE B4BE");
-    g_autofree gchar *start_vector = bear_fuzzer_get_start_vector(fuzzer);
-    g_autoptr(GBytes) data = bear_fuzzer_get_data(fuzzer, start_vector);
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+    g_autoptr(GBytes) data = bear_generator_get_data(generator, bear_generator_get_start_vector(generator));
     g_assert_cmpuint(g_bytes_get_size(data), ==, 5);
     guint8 expected[] = {0xC0, 0xFF, 0xEE, 0xB4, 0xBE};
     g_assert_cmpmem(g_bytes_get_data(data, NULL), 5, expected, 5);
@@ -58,13 +58,13 @@ static void variable_block_size() {
     bear_fuzzy_value_set_strings(variable_value, "a", "bb", "ccc", NULL);
     bear_fuzzer_end_block(fuzzer, "block");
 
-    gchar *vector = bear_fuzzer_get_start_vector(fuzzer);
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+
     GList *values = NULL;
-    while (vector) {
-        values = g_list_append(values, bear_fuzzer_get_data(fuzzer, vector));
-        gchar *new_vector = bear_fuzzer_get_next_vector(fuzzer, vector);
-        g_free(vector);
-        vector = new_vector;
+    while (bear_generator_get_current_vector(generator)) {
+        const gchar *vector = bear_generator_get_current_vector(generator);
+        values = g_list_append(values, bear_generator_get_data(generator, vector));
+        bear_generator_increment_vector(generator);
     }
 
     g_assert_cmpuint(g_list_length(values), ==, 3);
