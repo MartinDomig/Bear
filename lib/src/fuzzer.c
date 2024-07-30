@@ -231,13 +231,14 @@ void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb c
 static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer *fuzzer) {
     guint8 buffer[10240];
     g_autoptr(GError) error = NULL;
-    gsize bytes_available =
+    gssize bytes_available =
         g_pollable_input_stream_read_nonblocking(G_POLLABLE_INPUT_STREAM(fuzzer->input_stream), buffer, sizeof(buffer), NULL, &error);
     if (error) {
         g_message("Error reading from input stream @%s (%s)", bear_generator_get_current_vector(fuzzer->generator), error->message);
         fuzzer->connected = FALSE;
         if (fuzzer->on_disconnect)
             fuzzer->on_disconnect(fuzzer);
+        return G_SOURCE_REMOVE;
     }
 
     // when the remote side closes the connection, we will get a read event
