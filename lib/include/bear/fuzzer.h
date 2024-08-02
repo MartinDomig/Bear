@@ -41,13 +41,13 @@ void bear_fuzzer_begin_block(BearFuzzer *fuzzer, const gchar *block_name);
 void bear_fuzzer_end_block(BearFuzzer *fuzzer, const gchar *block_name);
 BearFuzzyValue *bear_fuzzer_block_size(BearFuzzer *fuzzer, const gchar *block_name, gsize size_length);
 
-typedef gboolean (*bear_fuzzer_cb)(BearFuzzer *fuzzer);
-typedef gboolean (*bear_fuzzer_connection_data_cb)(BearFuzzer *fuzzer, GBytes *data);
+typedef gboolean (*bear_fuzzer_cb)(BearFuzzer *fuzzer, const gchar *vector);
+typedef gboolean (*bear_fuzzer_data_cb)(BearFuzzer *fuzzer, const gchar *vector, GBytes *data_sent, GBytes *data_received);
 
 void bear_fuzzer_on_connect(BearFuzzer *fuzzer, bear_fuzzer_cb callback);
-void bear_fuzzer_on_disconnect(BearFuzzer *fuzzer, bear_fuzzer_cb callback);
-void bear_fuzzer_on_send(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb callback);
-void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb callback);
+void bear_fuzzer_on_disconnect(BearFuzzer *fuzzer, bear_fuzzer_data_cb callback);
+void bear_fuzzer_on_timeout(BearFuzzer *fuzzer, bear_fuzzer_cb callback);
+void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_data_cb callback);
 
 gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *data);
 

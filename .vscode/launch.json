@@ -4,7 +4,21 @@
     {
       "type": "by-gdb",
       "request": "launch",
-      "name": "Attach to gdbserver",
+      "name": "Wolfprot",
+      "program": "build/audit/wolfprot/wolfprot",
+      "programArgs": "-t vz2 -p 54321 -v",
+      "cwd": "${workspaceRoot}",
+      "remote": {
+        "enabled": true,
+        "address": "localhost:4321",
+        "mode": "extended-remote",
+        "execfile": "build/audit/wolfprot/wolfprot"
+      }
+    },
+    {
+      "type": "by-gdb",
+      "request": "launch",
+      "name": "Attach test",
       "program": "build/lib/tests/${fileBasenameNoExtension}",
       "cwd": "${workspaceRoot}",
       "remote": {

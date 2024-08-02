@@ -462,7 +462,7 @@ void bear_fuzzy_value_compute_recursive(BearFuzzyValue *value, GList *values, gs
         return;
 
     if (value->computing) {
-        g_warning("Circular dependency detected in fuzzy value (block: %s)", value->my_block_name);
+        g_error("Circular dependency detected in fuzzy value (block: %s)", value->my_block_name);
         return;
     }
 
@@ -481,6 +481,7 @@ void bear_fuzzy_value_compute_simple(BearFuzzyValue *value, gsize variability) {
         value->computed_data = g_bytes_ref(value->reference_value);
         return;
     }
+
     GBytes *entry = get_entry(value, variability);
     value->computed_data = g_bytes_ref(entry);
 }

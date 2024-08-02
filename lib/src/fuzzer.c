@@ -13,9 +13,9 @@ struct _BearFuzzer {
     GMainLoop *loop;
     BearOptions *options;
     bear_fuzzer_cb on_connect;
-    bear_fuzzer_cb on_disconnect;
-    bear_fuzzer_connection_data_cb on_send;
-    bear_fuzzer_connection_data_cb on_receive;
+    bear_fuzzer_data_cb on_disconnect;
+    bear_fuzzer_cb on_timeout;
+    bear_fuzzer_data_cb on_receive;
 
     GList *values;
 
@@ -28,6 +28,13 @@ struct _BearFuzzer {
     GList *block_stack;
 
     BearGenerator *generator;
+
+    GBytes *current_data;
+    gchar *current_vector;
+    gint num_packets;
+    gsize packet_seq;
+    guint receive_timeout_handle;
+    guint send_next_packet_handle;
 };
 
 G_DEFINE_TYPE(BearFuzzer, bear_fuzzer, G_TYPE_OBJECT)
@@ -49,6 +56,8 @@ void bear_fuzzer_finalize(GObject *object) {
     g_clear_object(&fuzzer->client);
     g_clear_object(&fuzzer->options);
     g_clear_object(&fuzzer->generator);
+    g_free(fuzzer->current_vector);
+    g_bytes_unref(fuzzer->current_data);
     G_OBJECT_CLASS(bear_fuzzer_parent_class)->finalize(object);
 }
 
@@ -213,59 +222,112 @@ void bear_fuzzer_on_connect(BearFuzzer *fuzzer, bear_fuzzer_cb callback) {
     fuzzer->on_connect = callback;
 }
 
-void bear_fuzzer_on_disconnect(BearFuzzer *fuzzer, bear_fuzzer_cb callback) {
+void bear_fuzzer_on_disconnect(BearFuzzer *fuzzer, bear_fuzzer_data_cb callback) {
     g_return_if_fail(BEAR_IS_FUZZER(fuzzer));
     fuzzer->on_disconnect = callback;
 }
 
-void bear_fuzzer_on_send(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb callback) {
-    g_return_if_fail(BEAR_IS_FUZZER(fuzzer));
-    fuzzer->on_send = callback;
-}
-
-void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_connection_data_cb callback) {
+void bear_fuzzer_on_receive(BearFuzzer *fuzzer, bear_fuzzer_data_cb callback) {
     g_return_if_fail(BEAR_IS_FUZZER(fuzzer));
     fuzzer->on_receive = callback;
 }
 
+static gboolean bear_fuzzer_connect(gpointer user_data);
+static gboolean send_next_packet(gpointer user_data);
+static gboolean receive_timeout_handler(gpointer user_data);
+
+static void schedule_next_packet(BearFuzzer *fuzzer) {
+    if (fuzzer->send_next_packet_handle) {
+        g_source_remove(fuzzer->send_next_packet_handle);
+        fuzzer->send_next_packet_handle = 0;
+    }
+    fuzzer->send_next_packet_handle = g_idle_add(send_next_packet, fuzzer);
+}
+
+static gboolean receive_timeout_handler(gpointer user_data) {
+    BearFuzzer *fuzzer = BEAR_FUZZER(user_data);
+
+    fuzzer->receive_timeout_handle = 0;
+    g_message("Receive timeout @%s", fuzzer->current_vector);
+    if (fuzzer->on_timeout)
+        fuzzer->on_timeout(fuzzer, fuzzer->current_vector);
+    schedule_next_packet(fuzzer);
+    return G_SOURCE_REMOVE;
+}
+
 static gboolean bear_fuzzer_connection_callback(GInputStream *source, BearFuzzer *fuzzer) {
-    guint8 buffer[10240];
-    g_autoptr(GError) error = NULL;
-    gssize bytes_available =
-        g_pollable_input_stream_read_nonblocking(G_POLLABLE_INPUT_STREAM(fuzzer->input_stream), buffer, sizeof(buffer), NULL, &error);
-    if (error) {
-        g_message("Error reading from input stream @%s (%s)", bear_generator_get_current_vector(fuzzer->generator), error->message);
-        fuzzer->connected = FALSE;
-        if (fuzzer->on_disconnect)
-            fuzzer->on_disconnect(fuzzer);
-        return G_SOURCE_REMOVE;
+    gboolean wait_for_data = TRUE;
+    int delay_ms = bear_options_get_receive_delay_ms(fuzzer->options);
+
+    if (fuzzer->receive_timeout_handle) {
+        g_source_remove(fuzzer->receive_timeout_handle);
+        fuzzer->receive_timeout_handle = 0;
     }
 
-    // when the remote side closes the connection, we will get a read event
-    // but no data will be available
-    if (bytes_available == 0) {
-        g_message("Remote closed connection @%s", bear_generator_get_current_vector(fuzzer->generator));
-        fuzzer->connected = FALSE;
-        if (fuzzer->on_disconnect)
-            fuzzer->on_disconnect(fuzzer);
-        return G_SOURCE_REMOVE;
+    while (wait_for_data) {
+        usleep(delay_ms * 1000);
+        g_autoptr(GByteArray) byte_array = g_byte_array_new();
+
+        guint8 buffer[1024];
+        gssize bytes_available = 0;
+        do {
+            g_autoptr(GError) error = NULL;
+
+            usleep(50 * 1000);
+            bytes_available = g_pollable_input_stream_read_nonblocking(G_POLLABLE_INPUT_STREAM(fuzzer->input_stream), buffer,
+                                                                       sizeof(buffer), NULL, &error);
+
+            // when the remote side closes the connection, we will get a read event
+            // but no data will be available
+            if (error || (bytes_available == 0 && byte_array->len == 0)) {
+                if (error)
+                    g_message("Error reading from input stream @%s (%s)", fuzzer->current_vector, error->message);
+                else
+                    g_message("Remote closed connection @%s", fuzzer->current_vector);
+
+                fuzzer->connected = FALSE;
+                gboolean should_reconnect = bear_options_reconnect_on_disconnect(fuzzer->options);
+                if (fuzzer->on_disconnect)
+                    should_reconnect &= fuzzer->on_disconnect(fuzzer, fuzzer->current_vector, fuzzer->current_data, NULL);
+
+                if (should_reconnect) {
+                    int delay_ms = bear_options_reconnect_delay_ms(fuzzer->options);
+                    g_debug("Reconnecting in %ims...", delay_ms);
+                    g_timeout_add(delay_ms, bear_fuzzer_connect, fuzzer);
+                } else {
+                    g_main_loop_quit(fuzzer->loop);
+                }
+
+                return G_SOURCE_REMOVE;
+            }
+
+            g_byte_array_append(byte_array, buffer, bytes_available);
+        } while (bytes_available == sizeof(buffer) || byte_array->len > 1024 * 1024);
+
+        if (bear_options_verbose(fuzzer->options))
+            g_debug("Received %zu bytes @%s", bytes_available, fuzzer->current_vector);
+
+        if (fuzzer->on_receive) {
+            g_autoptr(GBytes) data_received = NULL;
+            if (byte_array->len > 0)
+                data_received = g_bytes_new(byte_array->data, byte_array->len);
+            wait_for_data = !fuzzer->on_receive(fuzzer, fuzzer->current_vector, fuzzer->current_data, data_received);
+            if (wait_for_data)
+                g_message("Waiting for more data @%s (receive callback returned FALSE)", fuzzer->current_vector);
+        } else
+            wait_for_data = FALSE;
     }
 
-    g_autoptr(GBytes) data = g_bytes_new(buffer, bytes_available);
-
-    if (bear_options_verbose(fuzzer->options)) {
-        g_autofree gchar *hex = bear_tools_bytes_to_hex(data);
-        g_debug("Received %zu bytes @%s\n%s", bytes_available, bear_generator_get_current_vector(fuzzer->generator), hex);
-    }
-
-    if (fuzzer->on_receive) {
-        fuzzer->on_receive(fuzzer, data);
-    }
-
+    g_debug("Done receiving data, scheduling next packet");
+    schedule_next_packet(fuzzer);
     return G_SOURCE_CONTINUE;
 }
 
-static gboolean bear_fuzzer_connect(BearFuzzer *fuzzer) {
+static gboolean bear_fuzzer_connect(gpointer user_data) {
+    BearFuzzer *fuzzer = BEAR_FUZZER(user_data);
+
+    g_debug("Connecting...");
+
     const gchar *target = bear_options_get_target(fuzzer->options);
     int port = bear_options_get_port(fuzzer->options);
     if (bear_options_verbose(fuzzer->options))
@@ -276,7 +338,14 @@ static gboolean bear_fuzzer_connect(BearFuzzer *fuzzer) {
     fuzzer->connection = g_socket_client_connect_to_host(fuzzer->client, target, port, NULL, &error);
     if (error) {
         g_warning("Failed to connect to %s:%i TCP: %s", target, port, error->message);
-        return FALSE;
+        if (bear_options_reconnect_on_disconnect(fuzzer->options)) {
+            int delay_ms = bear_options_reconnect_delay_ms(fuzzer->options);
+            g_debug("Reconnecting in %ims...", delay_ms);
+            g_timeout_add(delay_ms, bear_fuzzer_connect, fuzzer);
+        } else {
+            g_main_loop_quit(fuzzer->loop);
+        }
+        return G_SOURCE_REMOVE;
     }
 
     GIOStream *stream = G_IO_STREAM(fuzzer->connection);
@@ -294,8 +363,10 @@ static gboolean bear_fuzzer_connect(BearFuzzer *fuzzer) {
     fuzzer->connected = TRUE;
     g_message("Connected to %s:%i TCP", target, port);
     if (fuzzer->on_connect)
-        fuzzer->on_connect(fuzzer);
-    return TRUE;
+        fuzzer->on_connect(fuzzer, fuzzer->current_vector);
+
+    schedule_next_packet(fuzzer);
+    return G_SOURCE_REMOVE;
 }
 
 gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *bytes) {
@@ -303,20 +374,12 @@ gsize bear_fuzzer_send(BearFuzzer *fuzzer, GBytes *bytes) {
     const guint8 *data = g_bytes_get_data(bytes, &size);
     gsize bytes_written = 0;
 
-    if (bear_options_verbose(fuzzer->options)) {
-        g_autofree gchar *hex = bear_tools_bytes_to_hex(bytes);
-        g_debug("Sending %zu bytes:\n%s", size, hex);
-    }
-
     g_autoptr(GError) error = NULL;
     g_output_stream_write_all(fuzzer->output_stream, data, size, &bytes_written, NULL, &error);
     if (error) {
         g_warning("Failed to write to socket: %s", error->message);
         return 0;
     }
-
-    if (fuzzer->on_send)
-        fuzzer->on_send(fuzzer, bytes);
 
     return bytes_written;
 }
@@ -346,65 +409,51 @@ static const gchar *get_effective_start_vector(BearFuzzer *fuzzer) {
     return bear_generator_get_start_vector(fuzzer->generator);
 }
 
-static gpointer bear_fuzzer_send_packets(gpointer user_data) {
+static gboolean send_next_packet(gpointer user_data) {
     BearFuzzer *fuzzer = BEAR_FUZZER(user_data);
 
-    bear_generator_set_vector(fuzzer->generator, get_effective_start_vector(fuzzer));
-    g_message("Start vector: %s", bear_generator_get_current_vector(fuzzer->generator));
-    g_message("Last vector: %s", bear_generator_get_last_vector(fuzzer->generator));
+    fuzzer->send_next_packet_handle = 0;
 
-    gsize num_packets = bear_options_get_num_packets_to_send(fuzzer->options);
-    gsize total_variability = bear_generator_total_variability(fuzzer->generator);
-    if (num_packets == 0)
-        num_packets = total_variability;
-    else
-        num_packets = MIN(num_packets, total_variability);
-
-    int delay_ms = bear_options_get_send_delay_ms(fuzzer->options);
-    if (delay_ms)
-        g_message("Delay between packets: %i ms", delay_ms);
-
-    gsize estimated_duration_seconds = num_packets * MAX(delay_ms, 5) / 1000;
-    // print estimated duration as HH:MM:SS
-    g_message("Estimated duration: %02zu:%02zu:%02zu", estimated_duration_seconds / 3600, (estimated_duration_seconds % 3600) / 60,
-              estimated_duration_seconds % 60);
-
-    gsize i = 0;
-    while (bear_generator_get_current_vector(fuzzer->generator) && (num_packets == 0 || i < num_packets)) {
-        i++;
-        const gchar *vector = bear_generator_get_current_vector(fuzzer->generator);
-        g_autoptr(GBytes) data = bear_generator_get_data(fuzzer->generator, vector);
-        if (data) {
-            gsize data_size = g_bytes_get_size(data);
-
-            if (bear_options_verbose(fuzzer->options))
-                g_message("#%zu @%s size: %zu", i, vector, data_size);
-
-            gsize sent = bear_fuzzer_send(fuzzer, data);
-            if (sent != data_size)
-                g_message("Send error @%s (sent %zu/%zu bytes)", vector, sent, data_size);
-
-            if (delay_ms > 0)
-                g_usleep(delay_ms * 1000);
-        }
-
-        int r = 1;
-        while (!fuzzer->connected && bear_options_reconnect_on_disconnect(fuzzer->options)) {
-            g_message("Remote disconnected, reconnecting (attempt #%i)...", r++);
-            g_usleep(bear_options_reconnect_delay_ms(fuzzer->options) * 1000);
-            bear_fuzzer_connect(fuzzer);
-        }
-
-        if (!fuzzer->connected) {
-            g_message("Fuzzer is disconnected, stopping at vector %s", vector);
-            break;
-        }
-
-        bear_generator_increment_vector(fuzzer->generator);
+    if (!fuzzer->connected) {
+        g_debug("Not connected, trying to connect...");
+        g_idle_add(bear_fuzzer_connect, fuzzer);
+        return G_SOURCE_REMOVE;
     }
 
-    g_main_loop_quit(fuzzer->loop);
-    return NULL;
+    BearGenerator *generator = bear_fuzzer_get_generator(fuzzer);
+
+    g_free(fuzzer->current_vector);
+    fuzzer->current_vector = NULL;
+    const gchar *vector = bear_generator_get_current_vector(generator);
+    if (vector == NULL || fuzzer->num_packets-- <= 0) {
+        g_message("Nothing more to send.");
+        g_main_loop_quit(fuzzer->loop);
+        return G_SOURCE_REMOVE;
+    }
+
+    fuzzer->current_vector = g_strdup(vector);
+
+    g_bytes_unref(fuzzer->current_data);
+    fuzzer->current_data = bear_generator_get_data(fuzzer->generator, fuzzer->current_vector);
+    if (!fuzzer->current_data) {
+        g_message("No data for vector %s", fuzzer->current_vector);
+        return G_SOURCE_CONTINUE;
+    }
+
+    gsize data_size = g_bytes_get_size(fuzzer->current_data);
+    g_message("#%zu @%s size: %zu", ++fuzzer->packet_seq, fuzzer->current_vector, data_size);
+
+    gsize sent = bear_fuzzer_send(fuzzer, fuzzer->current_data);
+    if (sent != data_size)
+        g_message("Send error @%s (sent %zu/%zu bytes)", fuzzer->current_vector, sent, data_size);
+
+    if (fuzzer->receive_timeout_handle)
+        g_source_remove(fuzzer->receive_timeout_handle);
+    // TODO make this number an option
+    fuzzer->receive_timeout_handle = g_timeout_add(2000, receive_timeout_handler, fuzzer);
+    bear_generator_increment_vector(fuzzer->generator);
+
+    return G_SOURCE_REMOVE;
 }
 
 void bear_fuzzer_run(BearFuzzer *fuzzer) {
@@ -419,8 +468,6 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
         return;
     }
     g_message("Running fuzzer on target: %s:%i", target, port);
-    if (!bear_fuzzer_connect(fuzzer))
-        return;
 
     if (bear_fuzzer_get_generator(fuzzer) == NULL) {
         g_error("Failed to create generator");
@@ -433,13 +480,21 @@ void bear_fuzzer_run(BearFuzzer *fuzzer) {
         return;
     }
 
-    GThread *thread = g_thread_new("fuzzer", (GThreadFunc)bear_fuzzer_send_packets, fuzzer);
+    bear_generator_set_vector(fuzzer->generator, get_effective_start_vector(fuzzer));
+    g_message("Start vector: %s", bear_generator_get_current_vector(fuzzer->generator));
+    g_message("Last vector: %s", bear_generator_get_last_vector(fuzzer->generator));
+
+    fuzzer->num_packets = bear_options_get_num_packets_to_send(fuzzer->options);
+    gsize total_variability = bear_generator_total_variability(fuzzer->generator);
+    if (fuzzer->num_packets == 0)
+        fuzzer->num_packets = total_variability;
+    fuzzer->packet_seq = 0;
 
     fuzzer->loop = g_main_loop_new(NULL, FALSE);
+    schedule_next_packet(fuzzer);
     g_unix_signal_add(SIGINT, (GSourceFunc)g_main_loop_quit, fuzzer->loop);
     g_unix_signal_add(SIGTERM, (GSourceFunc)g_main_loop_quit, fuzzer->loop);
     g_main_loop_run(fuzzer->loop);
-    g_thread_join(thread);
 }
 
 BearGenerator *bear_fuzzer_get_generator(BearFuzzer *fuzzer) {

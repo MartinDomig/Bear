@@ -5,11 +5,12 @@ struct _BearOptions {
 
     gchar *target;
     int port;
-    int send_delay_ms;
+    int receive_delay_ms;
     gchar *start_vector;
     int num_packets_to_send;
     gboolean reconnect_on_disconnect;
     int reconnect_delay_ms;
+    int receive_timeout_ms;
     gboolean verbose;
     int max_string_length;
 };
@@ -19,9 +20,10 @@ G_DEFINE_TYPE(BearOptions, bear_options, G_TYPE_OBJECT)
 static void bear_options_init(BearOptions *options) {
     options->target = NULL;
     options->port = 0;
-    options->send_delay_ms = 25;
+    options->receive_delay_ms = 25;
     options->reconnect_on_disconnect = FALSE;
     options->reconnect_delay_ms = 5000;
+    options->receive_timeout_ms = 1000;
     options->max_string_length = 10240;
 }
 
@@ -43,18 +45,27 @@ BearOptions *bear_options_new(gint argc, gchar *argv[]) {
         {"target", 't', 0, G_OPTION_ARG_STRING, &options->target, "Target host (required)", NULL},
         {"port", 'p', 0, G_OPTION_ARG_INT, &options->port, "Target port (required)", NULL},
         {
-            "send-delay-ms",
-            'd',
+            "receive-timeout-ms",
+            'T',
             0,
             G_OPTION_ARG_INT,
-            &options->send_delay_ms,
-            "Delay in milliseconds between sending packets",
+            &options->receive_timeout_ms,
+            "How long to wait for data to be received",
+            NULL,
+        },
+        {
+            "receive-delay-ms",
+            'R',
+            0,
+            G_OPTION_ARG_INT,
+            &options->receive_delay_ms,
+            "How long to wait for more data to receive",
             NULL,
         },
         {"start-vector", 's', 0, G_OPTION_ARG_STRING, &options->start_vector, "Start vector", NULL},
         {"num-packets-to-send", 'n', 0, G_OPTION_ARG_INT, &options->num_packets_to_send, "Number of packets to send", NULL},
-        {"reconnect-on-disconnect", 'c', 0, G_OPTION_ARG_NONE, &options->reconnect_on_disconnect,
-         "Reconnect when remote disconnected (crashed)", NULL},
+        {"reconnect-on-disconnect", 'c', 0, G_OPTION_ARG_NONE, &options->reconnect_on_disconnect, "Reconnect when remote disconnected",
+         NULL},
         {"reconnect-delay-ms", 'r', 0, G_OPTION_ARG_INT, &options->reconnect_delay_ms, "Delay in milliseconds between reconnect attempts",
          NULL},
         {"verbose", 'v', 0, G_OPTION_ARG_NONE, &options->verbose, "Enable verbose output", NULL},
@@ -81,9 +92,9 @@ int bear_options_get_port(BearOptions *options) {
     return options->port;
 }
 
-int bear_options_get_send_delay_ms(BearOptions *options) {
+int bear_options_get_receive_delay_ms(BearOptions *options) {
     g_return_val_if_fail(BEAR_IS_OPTIONS(options), -1);
-    return options->send_delay_ms;
+    return options->receive_delay_ms;
 }
 
 const gchar *bear_options_get_start_vector(BearOptions *options) {
@@ -114,4 +125,9 @@ gboolean bear_options_verbose(BearOptions *options) {
 int bear_options_max_string_length(BearOptions *options) {
     g_return_val_if_fail(BEAR_IS_OPTIONS(options), -1);
     return options->max_string_length;
+}
+
+int bear_options_receive_timeout_ms(BearOptions *options) {
+    g_return_val_if_fail(BEAR_IS_OPTIONS(options), -1);
+    return options->receive_timeout_ms;
 }

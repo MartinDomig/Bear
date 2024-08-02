@@ -13,6 +13,9 @@
  * ```
  */
 gchar *bear_tools_bytes_to_hex(GBytes *bytes) {
+    if (bytes == NULL)
+        return g_strdup("[no data]");
+
     gsize size;
     const guint8 *data = g_bytes_get_data(bytes, &size);
 
